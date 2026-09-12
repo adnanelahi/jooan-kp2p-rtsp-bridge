@@ -26,6 +26,8 @@ This repository ships both a **Home Assistant add-on** and a **plain Docker cont
 - `unavailable_stream_reconnect_delay`: Delay before retrying a channel that reports `result=-40` / unavailable.
 - `ffmpeg_loglevel`: FFmpeg log verbosity.
 - `transcode_h264`: Transcode the camera stream to H.264 with a one-second keyframe interval. Enable this for Home Assistant or browsers that time out or cannot decode the native H.265 stream. This uses additional CPU.
+- `on_demand_live`: Start a camera's live KP2P bridge only while an RTSP client is reading its path. Enabled by default. MediaMTX and the archive API remain available while the live camera connection and transcoder are stopped.
+- `on_demand_idle_timeout`: Seconds to keep a live bridge running after its final RTSP reader disconnects. The default is `60`, which avoids reconnect churn while navigating dashboards.
 - `archive_api_enabled`: Enable the authenticated, read-only SD-card recording API.
 - `archive_api_port`: TCP port for the archive API; default `8099`.
 - `archive_api_token`: A separate random secret used by the CasaCop Home Assistant integration. Do not reuse the camera password.
@@ -61,6 +63,8 @@ password: YOUR_PASSWORD
 reconnect_delay: 3
 unavailable_stream_reconnect_delay: 60
 ffmpeg_loglevel: warning
+on_demand_live: true
+on_demand_idle_timeout: 60
 cameras:
   - channel: 0
     enabled: true

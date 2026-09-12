@@ -28,6 +28,8 @@ class AddonLauncherOptionsTests(unittest.TestCase):
 
         self.assertEqual(options["host"], "192.168.1.10")
         self.assertFalse(options["transcode_h264"])
+        self.assertTrue(options["on_demand_live"])
+        self.assertEqual(options["on_demand_idle_timeout"], 60)
         self.assertFalse(options["archive_api_enabled"])
         self.assertEqual(options["archive_api_port"], 8099)
         self.assertEqual(options["cameras"][0], expected_first_camera)
@@ -128,6 +130,43 @@ class AddonLauncherOptionsTests(unittest.TestCase):
         self.assertIn("rtspAddress: :8554", config)
         self.assertIn("  cam1:", config)
         self.assertIn("  cam2:", config)
+        self.assertNotIn("runOnDemand:", config)
+
+    def test_build_shared_mediamtx_config_can_launch_bridges_on_demand(self) -> None:
+        cameras = [
+            addon_launcher.CameraConfig(channel=0, stream_id=1, rtsp_port=8554, rtsp_path="cam1"),
+            addon_launcher.CameraConfig(channel=3, stream_id=1, rtsp_port=8554, rtsp_path="front-door"),
+        ]
+
+        config = addon_launcher.build_shared_mediamtx_config(
+            cameras,
+            on_demand_live=True,
+            on_demand_idle_timeout=75,
+        )
+
+        self.assertIn("runOnDemand: ", config)
+        self.assertIn("/app/on_demand_launcher.py --channel 0", config)
+        self.assertIn("/app/on_demand_launcher.py --channel 3", config)
+        self.assertIn("runOnDemandRestart: yes", config)
+        self.assertIn("runOnDemandStartTimeout: 30s", config)
+        self.assertIn("runOnDemandCloseAfter: 75s", config)
+        self.assertNotIn("admin", config)
+
+    def test_build_shared_mediamtx_config_clamps_idle_timeout(self) -> None:
+        camera = addon_launcher.CameraConfig(
+            channel=0,
+            stream_id=1,
+            rtsp_port=8554,
+            rtsp_path="cam1",
+        )
+
+        config = addon_launcher.build_shared_mediamtx_config(
+            [camera],
+            on_demand_live=True,
+            on_demand_idle_timeout=1,
+        )
+
+        self.assertIn("runOnDemandCloseAfter: 5s", config)
 
     def test_build_shared_mediamtx_config_rejects_mixed_ports(self) -> None:
         cameras = [

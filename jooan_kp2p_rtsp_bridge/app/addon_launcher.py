@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import signal
 import socket
 import subprocess
@@ -20,6 +21,7 @@ OPTIONS_BACKUP_PATH = Path("/data/options.last_good.json")
 STARTUP_STAGGER_SECONDS = 1.0
 PROCESS_STOP_TIMEOUT_SECS = 5.0
 MEDIAMTX_STARTUP_TIMEOUT_SECS = 5.0
+ON_DEMAND_START_TIMEOUT_SECS = 30
 
 
 def log_event(message: str) -> None:
@@ -71,6 +73,8 @@ def default_options() -> dict:
         "unavailable_stream_reconnect_delay": 60,
         "ffmpeg_loglevel": "warning",
         "transcode_h264": False,
+        "on_demand_live": True,
+        "on_demand_idle_timeout": 60,
         "archive_api_enabled": False,
         "archive_api_port": 8099,
         "archive_api_token": "",
@@ -229,7 +233,23 @@ def build_bridge_command(options: dict, camera: CameraConfig) -> list[str]:
     return command
 
 
-def build_shared_mediamtx_config(cameras: list[CameraConfig]) -> str:
+def build_on_demand_command(camera: CameraConfig) -> str:
+    return shlex.join(
+        [
+            sys.executable,
+            "/app/on_demand_launcher.py",
+            "--channel",
+            str(camera.channel),
+        ]
+    )
+
+
+def build_shared_mediamtx_config(
+    cameras: list[CameraConfig],
+    *,
+    on_demand_live: bool = False,
+    on_demand_idle_timeout: int = 60,
+) -> str:
     if not cameras:
         raise ValueError("At least one camera is required")
     rtsp_port = cameras[0].rtsp_port
@@ -260,15 +280,35 @@ def build_shared_mediamtx_config(cameras: list[CameraConfig]) -> str:
         "srt: no",
         "paths:",
     ]
+    camera_by_path = {camera.rtsp_path.lstrip("/"): camera for camera in cameras}
+    idle_timeout = max(5, min(3600, on_demand_idle_timeout))
     for rtsp_path in paths:
         config.append(f"  {rtsp_path}:")
         config.append("    source: publisher")
+        if on_demand_live:
+            config.append(f"    runOnDemand: {build_on_demand_command(camera_by_path[rtsp_path])}")
+            config.append("    runOnDemandRestart: yes")
+            config.append(f"    runOnDemandStartTimeout: {ON_DEMAND_START_TIMEOUT_SECS}s")
+            config.append(f"    runOnDemandCloseAfter: {idle_timeout}s")
     return "\n".join(config) + "\n"
 
 
-def start_shared_mediamtx_process(cameras: list[CameraConfig], mediamtx_bin: str = "mediamtx") -> subprocess.Popen[bytes]:
+def start_shared_mediamtx_process(
+    cameras: list[CameraConfig],
+    mediamtx_bin: str = "mediamtx",
+    *,
+    on_demand_live: bool = False,
+    on_demand_idle_timeout: int = 60,
+) -> subprocess.Popen[bytes]:
     config_path = Path("/tmp/mediamtx_shared.yml")
-    config_path.write_text(build_shared_mediamtx_config(cameras), encoding="utf-8")
+    config_path.write_text(
+        build_shared_mediamtx_config(
+            cameras,
+            on_demand_live=on_demand_live,
+            on_demand_idle_timeout=on_demand_idle_timeout,
+        ),
+        encoding="utf-8",
+    )
     process: subprocess.Popen[bytes] = subprocess.Popen(
         [mediamtx_bin, str(config_path)],
         stdout=subprocess.PIPE,
@@ -326,16 +366,29 @@ def run_bridge(options: dict, host_label: str = "<HA_HOST_IP>") -> int:
                 [camera.channel for camera in cameras],
                 log_event,
             )
-        mediamtx_process = start_shared_mediamtx_process(cameras)
+        on_demand_live = _as_bool(options.get("on_demand_live", True), True)
+        on_demand_idle_timeout = max(
+            5,
+            min(3600, _as_int(options.get("on_demand_idle_timeout"), 60)),
+        )
+        mediamtx_process = start_shared_mediamtx_process(
+            cameras,
+            on_demand_live=on_demand_live,
+            on_demand_idle_timeout=on_demand_idle_timeout,
+        )
         log_event(f"shared_rtsp_server=started rtsp=rtsp://{host_label}:{cameras[0].rtsp_port}/<camera_path>")
-        for camera in cameras:
-            command = build_bridge_command(options, camera)
-            log_event(
-                f"starting camera={camera.channel + 1} channel={camera.channel} "
-                f"stream_id={camera.stream_id} rtsp=rtsp://{host_label}:{camera.rtsp_port}/{camera.rtsp_path}"
-            )
-            processes.append(subprocess.Popen(command))
-            time.sleep(STARTUP_STAGGER_SECONDS)
+        if on_demand_live:
+            log_event(f"live_mode=on_demand idle_timeout={on_demand_idle_timeout}s")
+        else:
+            log_event("live_mode=continuous")
+            for camera in cameras:
+                command = build_bridge_command(options, camera)
+                log_event(
+                    f"starting camera={camera.channel + 1} channel={camera.channel} "
+                    f"stream_id={camera.stream_id} rtsp=rtsp://{host_label}:{camera.rtsp_port}/{camera.rtsp_path}"
+                )
+                processes.append(subprocess.Popen(command))
+                time.sleep(STARTUP_STAGGER_SECONDS)
 
         while not stopping:
             if mediamtx_process is not None and mediamtx_process.poll() is not None:
