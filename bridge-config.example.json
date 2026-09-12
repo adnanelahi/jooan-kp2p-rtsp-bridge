@@ -8,6 +8,11 @@
   "reconnect_delay": 3,
   "unavailable_stream_reconnect_delay": 60,
   "ffmpeg_loglevel": "warning",
+  "transcode_h264": false,
+  "archive_api_enabled": false,
+  "archive_api_port": 8099,
+  "archive_api_token": "REPLACE_WITH_A_RANDOM_TOKEN",
+  "archive_timeout": 15,
   "cameras": [
     {
       "channel": 0,

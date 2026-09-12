@@ -28,9 +28,14 @@ APP_PROTO_CMD_AUTH_REQ = 10
 APP_PROTO_CMD_AUTH_RSP = 11
 APP_PROTO_CMD_LIVE_REQ = 30
 APP_PROTO_CMD_LIVE_RSP = 31
+APP_PROTO_CMD_REPLAY_REQ = 40
+APP_PROTO_CMD_REPLAY_RSP = 41
 
 APP_PROTO_PARAM_LIVE_CMD_STOP = 1
 APP_PROTO_PARAM_LIVE_CMD_START = 2
+APP_PROTO_PARAM_REPLAY_CMD_SEARCH = 1
+APP_PROTO_PARAM_REPLAY_CMD_STOP = 2
+APP_PROTO_PARAM_REPLAY_CMD_START = 3
 APP_PROTO_RESULT_STREAM_UNAVAILABLE = -40
 
 PROC_FRAME_MAGIC = 0x4652414D
@@ -41,6 +46,7 @@ PROC_FRAME_TYPE_IFRAME = 1
 PROC_FRAME_TYPE_PFRAME = 2
 
 P2P_FRAME_TYPE_LIVE = 0
+P2P_FRAME_TYPE_REPLAY = 1
 
 IOT_HDR_LEN = 32
 IOT_LINK_CMD_TURN_REQ = 12
@@ -146,6 +152,15 @@ class AudioFrame:
     channels: int
     timestamp_ms: int
     payload: bytes
+
+
+@dataclass
+class Recording:
+    channel: int
+    record_type: int
+    begin_time: int
+    end_time: int
+    quality: int
 
 
 def _rot_word(word: bytes) -> bytes:
@@ -290,6 +305,71 @@ def build_auth_payload(username: str, password: str) -> bytes:
 
 def build_live_payload(channel: int, stream_id: int, live_cmd: int) -> bytes:
     return pack_u32(channel) + pack_u32(stream_id) + pack_u32(live_cmd)
+
+
+def build_replay_payload(
+    replay_cmd: int,
+    channels: list[int],
+    record_type: int,
+    begin_time: int,
+    end_time: int,
+    session_index: int = 0,
+    session_count: int = 100,
+    open_type: int = 0,
+    quality: int = 0,
+) -> bytes:
+    """Build the vendor's 52-byte replay/search request payload."""
+    channel_mask = [0, 0, 0, 0]
+    for channel in channels:
+        if not 0 <= channel < 128:
+            raise ValueError("Replay channel must be between 0 and 127")
+        channel_mask[channel // 32] |= 1 << (channel % 32)
+    return b"".join(
+        pack_u32(value)
+        for value in (
+            replay_cmd,
+            open_type,
+            *channel_mask,
+            record_type,
+            0,
+            begin_time,
+            end_time,
+            quality,
+            session_index,
+            session_count,
+        )
+    )
+
+
+def parse_replay_search_response(payload: bytes) -> tuple[list[Recording], int, int]:
+    """Return records, response index, and total from a replay search page."""
+    header_size = 52
+    record_size = 20
+    if len(payload) < header_size:
+        raise Kp2pError(f"Short replay response payload: {len(payload)} bytes")
+    replay_cmd = int.from_bytes(payload[0:4], "little")
+    if replay_cmd != APP_PROTO_PARAM_REPLAY_CMD_SEARCH:
+        raise Kp2pError(f"Unexpected replay response command: {replay_cmd}")
+    session_index = int.from_bytes(payload[40:44], "little")
+    session_count = int.from_bytes(payload[44:48], "little")
+    session_total = int.from_bytes(payload[48:52], "little")
+    required_size = header_size + session_count * record_size
+    if len(payload) < required_size:
+        raise Kp2pError(
+            f"Truncated replay search page: expected {required_size} bytes, got {len(payload)}"
+        )
+    records = []
+    for offset in range(header_size, required_size, record_size):
+        records.append(
+            Recording(
+                channel=int.from_bytes(payload[offset : offset + 4], "little"),
+                record_type=int.from_bytes(payload[offset + 4 : offset + 8], "little"),
+                begin_time=int.from_bytes(payload[offset + 8 : offset + 12], "little"),
+                end_time=int.from_bytes(payload[offset + 12 : offset + 16], "little"),
+                quality=int.from_bytes(payload[offset + 16 : offset + 20], "little"),
+            )
+        )
+    return records, session_index, session_total
 
 
 def build_iot_header(cmd: int, ticket: int, sid: int, payload: bytes) -> bytes:
@@ -501,6 +581,40 @@ def parse_video_frame(payload: bytes, timestamp_ms: int) -> Optional[VideoFrame]
     return VideoFrame(codec, frame_type, channel, width, height, fps, timestamp_ms, video_payload)
 
 
+def parse_replay_video_frame(payload: bytes) -> Optional[VideoFrame]:
+    offset = 0
+    if len(payload) >= 40 and int.from_bytes(payload[0:4], "little") == PROC_FRAME_MAGIC2:
+        offset += 40
+    if len(payload) < offset + 24:
+        return None
+    if int.from_bytes(payload[offset : offset + 4], "little") != PROC_FRAME_MAGIC:
+        return None
+    headtype = int.from_bytes(payload[offset + 8 : offset + 12], "little")
+    if headtype != P2P_FRAME_TYPE_REPLAY:
+        return None
+    timestamp_ms = int.from_bytes(payload[offset + 16 : offset + 24], "little")
+    offset += 24
+    if len(payload) < offset + 16:
+        return None
+    frame_type = int.from_bytes(payload[offset : offset + 4], "little")
+    channel = int.from_bytes(payload[offset + 4 : offset + 8], "little")
+    offset += 16  # frame type, channel, recording type, recording quality
+    if frame_type not in (PROC_FRAME_TYPE_IFRAME, PROC_FRAME_TYPE_PFRAME):
+        return None
+    if len(payload) < offset + 24:
+        return None
+    params = payload[offset : offset + 24]
+    codec = params[0:8].split(b"\x00", 1)[0].decode("utf-8", "replace")
+    fps = int.from_bytes(params[8:12], "little")
+    width = int.from_bytes(params[12:16], "little")
+    height = int.from_bytes(params[16:20], "little")
+    video_payload = normalize_video_payload(payload[offset + 24 :], 0)
+    detected_codec = detect_codec_from_annexb(video_payload)
+    if detected_codec is not None:
+        codec = detected_codec
+    return VideoFrame(codec, frame_type, channel, width, height, fps, timestamp_ms, video_payload)
+
+
 def parse_audio_frame(payload: bytes, timestamp_ms: int) -> Optional[AudioFrame]:
     offset = 0
     if len(payload) >= 40 and int.from_bytes(payload[0:4], "little") == PROC_FRAME_MAGIC2:
@@ -702,6 +816,7 @@ class Kp2pClient:
         self.ticket = 0
         self.link_open = False
         self.last_ping = 0.0
+        self._pending_inner_payloads: list[bytes] = []
 
     def connect(self) -> None:
         ws_uri = f"ws://{self.endpoint.host}:{self.endpoint.port}"
@@ -801,6 +916,132 @@ class Kp2pClient:
         )
         self._send_iot(IOT_LINK_CMD_DATA, packet)
 
+    def search_recordings(
+        self,
+        channel: int,
+        begin_time: int,
+        end_time: int,
+        record_type: int = 15,
+        page_size: int = 100,
+        max_results: int = 10_000,
+    ) -> list[Recording]:
+        """List SD-card recordings in a Unix-time interval without modifying them."""
+        if begin_time >= end_time:
+            raise ValueError("Recording search begin_time must be before end_time")
+        if not 1 <= page_size <= 100:
+            raise ValueError("Recording search page_size must be between 1 and 100")
+        if max_results < 1:
+            raise ValueError("Recording search max_results must be positive")
+
+        recordings: list[Recording] = []
+        session_index = 0
+        while True:
+            self.ticket += 1
+            packet = build_api_packet(
+                APP_PROTO_CMD_REPLAY_REQ,
+                self.ticket,
+                build_replay_payload(
+                    APP_PROTO_PARAM_REPLAY_CMD_SEARCH,
+                    [channel],
+                    record_type,
+                    begin_time,
+                    end_time,
+                    session_index=session_index,
+                    session_count=min(page_size, max_results - len(recordings)),
+                ),
+            )
+            self._send_iot(IOT_LINK_CMD_DATA, packet)
+            deadline = time.time() + self.timeout
+            while time.time() < deadline:
+                payload = self._recv_inner_payload()
+                if len(payload) < 24 or int.from_bytes(payload[0:4], "little") != APP_PROTO_MAGIC:
+                    continue
+                header = parse_api_header(payload)
+                if header.cmd != APP_PROTO_CMD_REPLAY_RSP:
+                    continue
+                if header.result != 0:
+                    raise Kp2pError(f"Recording search failed with result={header.result}")
+                page, response_index, total = parse_replay_search_response(payload[24:])
+                recordings.extend(page)
+                if not page or len(recordings) >= total or len(recordings) >= max_results:
+                    return recordings[:max_results]
+                next_index = response_index + len(page)
+                if next_index <= session_index:
+                    raise Kp2pError("Recording search pagination did not advance")
+                session_index = next_index
+                break
+            else:
+                raise Kp2pError("Timed out waiting for recording search response")
+
+    def open_recording(self, recording: Recording, open_type: int = 0) -> None:
+        self.ticket += 1
+        packet = build_api_packet(
+            APP_PROTO_CMD_REPLAY_REQ,
+            self.ticket,
+            build_replay_payload(
+                APP_PROTO_PARAM_REPLAY_CMD_START,
+                [recording.channel],
+                recording.record_type,
+                recording.begin_time,
+                recording.end_time,
+                open_type=open_type,
+                quality=recording.quality,
+            ),
+        )
+        self._send_iot(IOT_LINK_CMD_DATA, packet)
+        deadline = time.time() + self.timeout
+        while time.time() < deadline:
+            payload = self._recv_inner_payload()
+            magic = int.from_bytes(payload[0:4], "little") if len(payload) >= 4 else -1
+            replay_offset = 40 if magic == PROC_FRAME_MAGIC2 else 0
+            if (
+                magic in {PROC_FRAME_MAGIC, PROC_FRAME_MAGIC2}
+                and len(payload) >= replay_offset + 12
+                and int.from_bytes(payload[replay_offset + 8 : replay_offset + 12], "little")
+                == P2P_FRAME_TYPE_REPLAY
+            ):
+                self._pending_inner_payloads.append(payload)
+                return
+            if len(payload) < 24 or magic != APP_PROTO_MAGIC:
+                continue
+            header = parse_api_header(payload)
+            if header.cmd != APP_PROTO_CMD_REPLAY_RSP:
+                continue
+            response_payload = payload[24 : 24 + header.size]
+            if len(response_payload) < 4:
+                raise Kp2pError("Short recording playback response")
+            replay_cmd = int.from_bytes(response_payload[0:4], "little")
+            if replay_cmd != APP_PROTO_PARAM_REPLAY_CMD_START:
+                continue
+            if header.result != 0:
+                raise Kp2pError(f"Recording playback failed with result={header.result}")
+            return
+        raise Kp2pError("Timed out waiting for recording playback response")
+
+    def recv_recorded_media(self) -> Optional[VideoFrame | AudioFrame]:
+        self._maybe_send_ping()
+        payload = self._recv_inner_payload()
+        magic = int.from_bytes(payload[0:4], "little") if len(payload) >= 4 else -1
+        if magic not in {PROC_FRAME_MAGIC, PROC_FRAME_MAGIC2}:
+            return None
+        return parse_replay_video_frame(payload)
+
+    def close_recording(self, channel: int = 0) -> None:
+        self.ticket += 1
+        packet = build_api_packet(
+            APP_PROTO_CMD_REPLAY_REQ,
+            self.ticket,
+            build_replay_payload(
+                APP_PROTO_PARAM_REPLAY_CMD_STOP,
+                [channel],
+                0,
+                0,
+                0,
+                session_count=0,
+            ),
+        )
+        self._send_iot(IOT_LINK_CMD_DATA, packet)
+
     def recv_media(self) -> Optional[VideoFrame | AudioFrame]:
         self._maybe_send_ping()
         payload = self._recv_inner_payload()
@@ -825,6 +1066,8 @@ class Kp2pClient:
         self.last_ping = now
 
     def _recv_inner_payload(self) -> bytes:
+        if self._pending_inner_payloads:
+            return self._pending_inner_payloads.pop(0)
         while True:
             cmd, _, _, _, payload = self._recv_iot_packet()
             if cmd in {IOT_LINK_CMD_DATA, IOT_LINK_CMD_DATA_PRIOR}:

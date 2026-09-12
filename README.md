@@ -8,6 +8,7 @@ Home Assistant add-on and plain Docker packaging for restreaming Jooan / Juanvis
 - `jooan_kp2p_rtsp_bridge/` - the Home Assistant add-on package
 - `Dockerfile` - generic Docker image for Synology Container Manager or plain Docker
 - `bridge-config.example.json` - sample JSON config for generic containers
+- `custom_components/casacop` - Home Assistant Media Source integration for SD-card recordings
 
 ## Deployment modes
 
@@ -41,6 +42,9 @@ The bridge:
 - prefixes operational and subprocess log lines with local timestamps
 - logs a per-camera availability percentage once per 24-hour reporting window
 - can be consumed by Frigate, go2rtc, VLC, or other RTSP-capable clients
+- can expose an authenticated, read-only SD recording index and browser-compatible playback API
+
+The optional CasaCop custom integration connects to that archive API and exposes recordings in Home Assistant's Media Browser. See `jooan_kp2p_rtsp_bridge/DOCS.md` for the development installation steps.
 
 See `jooan_kp2p_rtsp_bridge/DOCS.md` for Home Assistant and Docker/Synology setup details.
 

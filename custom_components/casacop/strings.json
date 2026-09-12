@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to CasaCop archive bridge",
+        "description": "Enter the Home Assistant host address, archive API port, and token configured in the Jooan bridge App.",
+        "data": {
+          "name": "Name",
+          "host": "Bridge host",
+          "port": "Archive API port",
+          "api_token": "Archive API token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect or the API token is incorrect",
+      "no_channels": "The bridge did not report any enabled cameras"
+    },
+    "abort": {
+      "already_configured": "This bridge is already configured"
+    }
+  }
+}

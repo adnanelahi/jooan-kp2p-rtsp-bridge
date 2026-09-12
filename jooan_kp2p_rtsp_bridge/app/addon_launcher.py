@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO, Callable
 
+from archive_server import ArchiveApiServer, start_archive_api
+
 
 OPTIONS_PATH = Path("/data/options.json")
 OPTIONS_BACKUP_PATH = Path("/data/options.last_good.json")
@@ -66,8 +68,13 @@ def default_options() -> dict:
         "username": "admin",
         "password": "",
         "reconnect_delay": 3,
+        "unavailable_stream_reconnect_delay": 60,
         "ffmpeg_loglevel": "warning",
         "transcode_h264": False,
+        "archive_api_enabled": False,
+        "archive_api_port": 8099,
+        "archive_api_token": "",
+        "archive_timeout": 15,
         "cameras": [
             {
                 "channel": channel,
@@ -302,6 +309,7 @@ def run_bridge(options: dict, host_label: str = "<HA_HOST_IP>") -> int:
 
     processes: list[subprocess.Popen[bytes]] = []
     mediamtx_process: subprocess.Popen[bytes] | None = None
+    archive_server: ArchiveApiServer | None = None
     stopping = False
 
     def handle_signal(signum, frame) -> None:  # type: ignore[unused-argument]
@@ -312,6 +320,12 @@ def run_bridge(options: dict, host_label: str = "<HA_HOST_IP>") -> int:
     signal.signal(signal.SIGINT, handle_signal)
 
     try:
+        if _as_bool(options.get("archive_api_enabled", False)):
+            archive_server, _ = start_archive_api(
+                options,
+                [camera.channel for camera in cameras],
+                log_event,
+            )
         mediamtx_process = start_shared_mediamtx_process(cameras)
         log_event(f"shared_rtsp_server=started rtsp=rtsp://{host_label}:{cameras[0].rtsp_port}/<camera_path>")
         for camera in cameras:
@@ -339,6 +353,9 @@ def run_bridge(options: dict, host_label: str = "<HA_HOST_IP>") -> int:
             terminate_process(process)
         if mediamtx_process is not None:
             terminate_process(mediamtx_process)
+        if archive_server is not None:
+            archive_server.shutdown()
+            archive_server.server_close()
 
 
 def main() -> int:

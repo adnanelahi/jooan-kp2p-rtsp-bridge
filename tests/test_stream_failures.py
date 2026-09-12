@@ -15,10 +15,12 @@ from kp2p_ws_client import (  # noqa: E402
     Endpoint,
     Kp2pStreamOpenError,
     P2P_FRAME_TYPE_LIVE,
+    P2P_FRAME_TYPE_REPLAY,
     PROC_FRAME_MAGIC,
     PROC_FRAME_TYPE_IFRAME,
     PROC_FRAME_TYPE_PFRAME,
     VideoFrame,
+    build_replay_payload,
     convert_length_prefixed_to_annexb,
     detect_codec_from_annexb,
     encrypt_auth_string,
@@ -26,6 +28,8 @@ from kp2p_ws_client import (  # noqa: E402
     iter_annexb_nal_units,
     normalize_video_payload,
     parse_api_header,
+    parse_replay_search_response,
+    parse_replay_video_frame,
     parse_video_frame,
     slice_declared_frame_payload,
 )
@@ -47,6 +51,47 @@ from rtsp_bridge import (  # noqa: E402
 
 
 class StreamFailureTests(unittest.TestCase):
+    def test_replay_search_payload_uses_channel_mask_and_times(self) -> None:
+        payload = build_replay_payload(1, [0, 33], 15, 1000, 2000, 7, 25)
+
+        self.assertEqual(len(payload), 52)
+        self.assertEqual(struct.unpack("<13I", payload), (1, 0, 1, 2, 0, 0, 15, 0, 1000, 2000, 0, 7, 25))
+
+    def test_parse_replay_search_response(self) -> None:
+        response_header = struct.pack(
+            "<13I", 1, 1, 0, 0, 0, 15, 0, 1000, 2000, 0, 0, 2, 2
+        )
+        response_records = struct.pack("<10I", 0, 1, 1100, 1200, 3, 0, 2, 1300, 1400, 4)
+
+        records, index, total = parse_replay_search_response(response_header + response_records)
+
+        self.assertEqual(index, 0)
+        self.assertEqual(total, 2)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0].begin_time, 1100)
+        self.assertEqual(records[1].record_type, 2)
+
+    def test_parse_replay_video_frame(self) -> None:
+        frame_head = struct.pack("<6I", PROC_FRAME_MAGIC, 1, P2P_FRAME_TYPE_REPLAY, 0, 1234, 0)
+        replay_head = struct.pack("<4I", PROC_FRAME_TYPE_IFRAME, 0, 2, 0)
+        video_params = b"H265\0\0\0\0" + struct.pack("<4I", 15, 640, 360, 0)
+        video = b"\x00\x00\x00\x01\x26\x01\x02\x03"
+
+        frame = parse_replay_video_frame(frame_head + replay_head + video_params + video)
+
+        self.assertIsNotNone(frame)
+        assert frame is not None
+        self.assertEqual(frame.codec, "H265")
+        self.assertEqual(frame.channel, 0)
+        self.assertEqual(frame.timestamp_ms, 1234)
+        self.assertEqual(frame.payload, video)
+
+    def test_pending_inner_payload_is_returned_first(self) -> None:
+        client = sys.modules["kp2p_ws_client"].Kp2pClient(Endpoint("127.0.0.1", 10000, 1, 1))
+        client._pending_inner_payloads.append(b"pending")
+
+        self.assertEqual(client._recv_inner_payload(), b"pending")
+
     def build_video_payload(
         self,
         codec: bytes,

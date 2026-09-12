@@ -28,6 +28,8 @@ class AddonLauncherOptionsTests(unittest.TestCase):
 
         self.assertEqual(options["host"], "192.168.1.10")
         self.assertFalse(options["transcode_h264"])
+        self.assertFalse(options["archive_api_enabled"])
+        self.assertEqual(options["archive_api_port"], 8099)
         self.assertEqual(options["cameras"][0], expected_first_camera)
         self.assertEqual(len(options["cameras"]), 8)
         self.assertTrue(all(camera["rtsp_port"] == 8554 for camera in options["cameras"]))

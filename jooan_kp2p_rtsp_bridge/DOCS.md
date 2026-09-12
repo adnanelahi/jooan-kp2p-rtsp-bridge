@@ -26,6 +26,10 @@ This repository ships both a **Home Assistant add-on** and a **plain Docker cont
 - `unavailable_stream_reconnect_delay`: Delay before retrying a channel that reports `result=-40` / unavailable.
 - `ffmpeg_loglevel`: FFmpeg log verbosity.
 - `transcode_h264`: Transcode the camera stream to H.264 with a one-second keyframe interval. Enable this for Home Assistant or browsers that time out or cannot decode the native H.265 stream. This uses additional CPU.
+- `archive_api_enabled`: Enable the authenticated, read-only SD-card recording API.
+- `archive_api_port`: TCP port for the archive API; default `8099`.
+- `archive_api_token`: A separate random secret used by the CasaCop Home Assistant integration. Do not reuse the camera password.
+- `archive_timeout`: Camera operation timeout for archive queries and playback.
 - `cameras`: List of camera bridge definitions.
 
 ### Camera list
@@ -74,6 +78,58 @@ cameras:
     rtsp_port: 8554
     rtsp_path: cam16_sub
 ```
+
+## SD-card recordings (development build)
+
+Version `0.6.0-casacop.1` adds a read-only archive API and the initial CasaCop Home Assistant Media Source integration.
+
+The App provides:
+
+- `GET /health` — authenticated health check and enabled channel list;
+- `GET /api/recordings` — paginated SD recording search by channel and Unix time range;
+- `GET /api/playback` — on-demand KP2P playback transcoded to fragmented H.264/MP4.
+
+All endpoints require `Authorization: Bearer <archive_api_token>`. Playback reads the camera's SD card and does not delete or change recordings.
+
+Configure the App with a random token:
+
+```yaml
+archive_api_enabled: true
+archive_api_port: 8099
+archive_api_token: REPLACE_WITH_A_LONG_RANDOM_VALUE
+archive_timeout: 15
+```
+
+Then rebuild and restart the App. Its log should contain:
+
+```text
+archive_api=started url=http://<HA_HOST_IP>:8099
+```
+
+### Install the CasaCop Media Source integration
+
+This is currently a development integration and is not yet in HACS's default catalog. It can be installed from the fork as a HACS custom repository after the development branch is published, or copied manually.
+
+For HACS, add `https://github.com/adnanelahi/jooan-kp2p-rtsp-bridge` as an **Integration** custom repository, install **CasaCop / Jooan SD Recordings**, and restart Home Assistant.
+
+For a manual installation:
+
+1. Copy `custom_components/casacop` into Home Assistant's `/config/custom_components/casacop` directory.
+2. Restart Home Assistant Core.
+3. Open **Settings -> Devices & services -> Add integration**.
+4. Select **CasaCop / Jooan SD Recordings**.
+5. Enter the Home Assistant host IP, port `8099`, and the same archive API token configured in the App.
+6. Open Home Assistant's **Media** panel and select **CasaCop SD recordings**.
+
+The Media Source shows enabled camera channels, dates containing recordings from the previous 14 days, and individual continuous or motion segments. Selecting a segment opens an authenticated Home Assistant proxy; the archive token is not placed in the browser URL.
+
+Current development limitations:
+
+- playback is transcoded in real time and therefore consumes Raspberry Pi CPU while viewed;
+- there is no local recording cache;
+- HTTP Range seeking and thumbnails are not implemented yet;
+- the integration has not yet been packaged as a separate HACS repository;
+- Camera Gallery Card compatibility remains to be tested after installation, while the built-in Media Browser is the initial supported UI.
 
 ## Consumer configuration
 
