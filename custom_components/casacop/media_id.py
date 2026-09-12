@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import datetime as dt
+
+
+def candidate_archive_days(today: dt.date, lookback_days: int) -> list[dt.date]:
+    """Return newest-first day folders without scanning the camera archive."""
+    return [today - dt.timedelta(days=offset) for offset in range(max(0, lookback_days) + 1)]
+
 
 def build_recording_identifier(
     entry_id: str,

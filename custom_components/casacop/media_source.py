@@ -16,7 +16,11 @@ from homeassistant.util import dt as dt_util
 
 from .api import CasaCopApi, Recording
 from .const import DOMAIN
-from .media_id import build_recording_identifier, parse_recording_identifier
+from .media_id import (
+    build_recording_identifier,
+    candidate_archive_days,
+    parse_recording_identifier,
+)
 from .views import async_generate_playback_proxy_url
 
 
@@ -120,20 +124,10 @@ class CasaCopMediaSource(MediaSource):
         return self._directory(f"ENTRY|{entry_id}", "Cameras", children)
 
     async def _days(self, entry_id: str, channel: int) -> BrowseMediaSource:
-        end = dt_util.now()
-        start = (end - dt.timedelta(days=LOOKBACK_DAYS)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        recordings = await self._api(entry_id).async_recordings(
-            channel, int(start.timestamp()), int(end.timestamp())
-        )
-        days = sorted(
-            {
-                dt_util.as_local(dt.datetime.fromtimestamp(recording.begin_time, dt.UTC)).date()
-                for recording in recordings
-            },
-            reverse=True,
-        )
+        # Browsing a Media Source has a short frontend timeout. Searching the
+        # camera's whole retention window here can exceed it, so expose cheap
+        # candidate folders and query only the day the user actually opens.
+        days = candidate_archive_days(dt_util.now().date(), LOOKBACK_DAYS)
         children = [
             BrowseMediaSource(
                 domain=DOMAIN,
