@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .api import CasaCopApi, Recording
 from .const import DOMAIN
+from .media_id import build_recording_identifier, parse_recording_identifier
 from .views import async_generate_playback_proxy_url
 
 
@@ -43,18 +44,20 @@ class CasaCopMediaSource(MediaSource):
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         if item.identifier is None:
             raise Unresolvable("CasaCop media item has no identifier")
-        parts = item.identifier.split("|")
-        if parts[0] != "FILE" or len(parts) != 7:
+        try:
+            entry_id, channel, record_type, start, end, quality = parse_recording_identifier(
+                item.identifier
+            )
+        except (ValueError, IndexError):
             raise Unresolvable(f"CasaCop media item is not playable: {item.identifier}")
-        _, entry_id, channel, record_type, start, end, quality = parts
         return PlayMedia(
             async_generate_playback_proxy_url(
                 entry_id,
-                int(channel),
-                int(record_type),
-                int(start),
-                int(end),
-                int(quality),
+                channel,
+                record_type,
+                start,
+                end,
+                quality,
             ),
             "video/mp4",
         )
@@ -168,9 +171,14 @@ class CasaCopMediaSource(MediaSource):
         kind = "Motion" if recording.record_type == 2 else "Recording"
         return BrowseMediaSource(
             domain=DOMAIN,
-            identifier=(
-                f"FILE|{entry_id}|{recording.channel}|{recording.record_type}|"
-                f"{recording.begin_time}|{recording.end_time}|{recording.quality}"
+            identifier=build_recording_identifier(
+                entry_id,
+                recording.channel,
+                recording.record_type,
+                recording.begin_time,
+                recording.end_time,
+                recording.quality,
+                begin.date().isoformat(),
             ),
             media_class=MediaClass.VIDEO,
             media_content_type=MediaType.VIDEO,
