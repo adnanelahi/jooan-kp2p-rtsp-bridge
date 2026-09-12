@@ -12,6 +12,8 @@ APP_DIR = Path(__file__).resolve().parents[1] / "jooan_kp2p_rtsp_bridge" / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from kp2p_ws_client import (  # noqa: E402
+    APP_PROTO_CMD_REPLAY_RSP,
+    Kp2pClient,
     Endpoint,
     Kp2pStreamOpenError,
     P2P_FRAME_TYPE_LIVE,
@@ -20,6 +22,7 @@ from kp2p_ws_client import (  # noqa: E402
     PROC_FRAME_TYPE_IFRAME,
     PROC_FRAME_TYPE_PFRAME,
     VideoFrame,
+    build_api_packet,
     build_replay_payload,
     convert_length_prefixed_to_annexb,
     detect_codec_from_annexb,
@@ -51,6 +54,29 @@ from rtsp_bridge import (  # noqa: E402
 
 
 class StreamFailureTests(unittest.TestCase):
+    def test_recording_search_advances_time_when_firmware_total_is_batch_local(self) -> None:
+        def response(records: list[tuple[int, int, int, int, int]]) -> bytes:
+            replay_header = struct.pack(
+                "<13I", 1, 0, 0, 0, 0, 0, 15, 0, 100, 200, 0, len(records), len(records)
+            )
+            replay_records = b"".join(struct.pack("<5I", *record) for record in records)
+            return build_api_packet(APP_PROTO_CMD_REPLAY_RSP, 1, replay_header + replay_records)
+
+        client = Kp2pClient(Endpoint("127.0.0.1", 10000, 1, 1))
+        responses = iter(
+            (
+                response([(0, 1, 100, 120, 0), (0, 1, 120, 140, 0)]),
+                response([(0, 1, 141, 160, 0)]),
+                response([]),
+            )
+        )
+        client._send_iot = lambda _cmd, _payload: None  # type: ignore[method-assign]
+        client._recv_inner_payload = lambda: next(responses)  # type: ignore[method-assign]
+
+        recordings = client.search_recordings(0, 100, 200)
+
+        self.assertEqual([recording.begin_time for recording in recordings], [100, 120, 141])
+
     def test_replay_search_payload_uses_channel_mask_and_times(self) -> None:
         payload = build_replay_payload(1, [0, 33], 15, 1000, 2000, 7, 25)
 

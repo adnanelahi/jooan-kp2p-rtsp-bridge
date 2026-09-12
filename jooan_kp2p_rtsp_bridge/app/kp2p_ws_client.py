@@ -934,44 +934,73 @@ class Kp2pClient:
             raise ValueError("Recording search max_results must be positive")
 
         recordings: list[Recording] = []
-        session_index = 0
-        while True:
-            self.ticket += 1
-            packet = build_api_packet(
-                APP_PROTO_CMD_REPLAY_REQ,
-                self.ticket,
-                build_replay_payload(
-                    APP_PROTO_PARAM_REPLAY_CMD_SEARCH,
-                    [channel],
-                    record_type,
-                    begin_time,
-                    end_time,
-                    session_index=session_index,
-                    session_count=min(page_size, max_results - len(recordings)),
-                ),
-            )
-            self._send_iot(IOT_LINK_CMD_DATA, packet)
-            deadline = time.time() + self.timeout
-            while time.time() < deadline:
-                payload = self._recv_inner_payload()
-                if len(payload) < 24 or int.from_bytes(payload[0:4], "little") != APP_PROTO_MAGIC:
-                    continue
-                header = parse_api_header(payload)
-                if header.cmd != APP_PROTO_CMD_REPLAY_RSP:
-                    continue
-                if header.result != 0:
-                    raise Kp2pError(f"Recording search failed with result={header.result}")
-                page, response_index, total = parse_replay_search_response(payload[24:])
-                recordings.extend(page)
-                if not page or len(recordings) >= total or len(recordings) >= max_results:
-                    return recordings[:max_results]
-                next_index = response_index + len(page)
-                if next_index <= session_index:
-                    raise Kp2pError("Recording search pagination did not advance")
-                session_index = next_index
-                break
-            else:
-                raise Kp2pError("Timed out waiting for recording search response")
+        seen: set[tuple[int, int, int, int, int]] = set()
+        cursor = begin_time
+        while cursor < end_time:
+            batch: list[Recording] = []
+            session_index = 0
+            while True:
+                remaining = max_results - len(recordings)
+                if remaining <= 0:
+                    return recordings
+                self.ticket += 1
+                packet = build_api_packet(
+                    APP_PROTO_CMD_REPLAY_REQ,
+                    self.ticket,
+                    build_replay_payload(
+                        APP_PROTO_PARAM_REPLAY_CMD_SEARCH,
+                        [channel],
+                        record_type,
+                        cursor,
+                        end_time,
+                        session_index=session_index,
+                        session_count=min(page_size, remaining),
+                    ),
+                )
+                self._send_iot(IOT_LINK_CMD_DATA, packet)
+                deadline = time.time() + self.timeout
+                while time.time() < deadline:
+                    payload = self._recv_inner_payload()
+                    if len(payload) < 24 or int.from_bytes(payload[0:4], "little") != APP_PROTO_MAGIC:
+                        continue
+                    header = parse_api_header(payload)
+                    if header.cmd != APP_PROTO_CMD_REPLAY_RSP:
+                        continue
+                    if header.result != 0:
+                        raise Kp2pError(f"Recording search failed with result={header.result}")
+                    page, response_index, total = parse_replay_search_response(payload[24:])
+                    batch.extend(page)
+                    for recording in page:
+                        key = (
+                            recording.channel,
+                            recording.record_type,
+                            recording.begin_time,
+                            recording.end_time,
+                            recording.quality,
+                        )
+                        if key not in seen:
+                            seen.add(key)
+                            recordings.append(recording)
+                    if not page or len(recordings) >= max_results or len(batch) >= total:
+                        break
+                    next_index = response_index + len(page)
+                    if next_index <= session_index:
+                        raise Kp2pError("Recording search pagination did not advance")
+                    session_index = next_index
+                    break
+                else:
+                    raise Kp2pError("Timed out waiting for recording search response")
+                if not page or len(recordings) >= max_results or len(batch) >= total:
+                    break
+
+            if not batch:
+                return recordings
+            next_cursor = max(recording.end_time for recording in batch) + 1
+            if next_cursor <= cursor:
+                raise Kp2pError("Recording search time cursor did not advance")
+            cursor = next_cursor
+
+        return recordings
 
     def open_recording(self, recording: Recording, open_type: int = 0) -> None:
         self.ticket += 1
