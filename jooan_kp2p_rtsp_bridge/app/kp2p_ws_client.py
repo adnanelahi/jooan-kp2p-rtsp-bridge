@@ -277,8 +277,8 @@ def build_api_packet(cmd: int, ticket: int, payload: bytes) -> bytes:
 
 def encrypt_auth_string(value: str) -> bytes:
     raw = value.encode("utf-8")
-    if len(raw) >= APP_PROTO_PARAM_AUTH_NAME_STRLEN:
-        raise ValueError("Authentication strings must be shorter than 32 bytes")
+    if len(raw) > APP_PROTO_PARAM_AUTH_NAME_STRLEN:
+        raise ValueError("Authentication strings must not exceed 32 bytes")
     first = raw[:16].ljust(16, b"\x00")
     second = raw[16:32].ljust(16, b"\x00")
     return aes128_ecb_encrypt(first + second)

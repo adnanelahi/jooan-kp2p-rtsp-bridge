@@ -21,6 +21,7 @@ from kp2p_ws_client import (  # noqa: E402
     VideoFrame,
     convert_length_prefixed_to_annexb,
     detect_codec_from_annexb,
+    encrypt_auth_string,
     find_annexb_start,
     iter_annexb_nal_units,
     normalize_video_payload,
@@ -84,6 +85,15 @@ class StreamFailureTests(unittest.TestCase):
         header = parse_api_header(payload)
 
         self.assertEqual(header.result, -40)
+
+    def test_auth_string_accepts_exactly_32_bytes(self) -> None:
+        encrypted = encrypt_auth_string("a" * 32)
+
+        self.assertEqual(len(encrypted), 32)
+
+    def test_auth_string_rejects_more_than_32_bytes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not exceed 32 bytes"):
+            encrypt_auth_string("a" * 33)
 
     def test_channel_unavailable_errors_back_off_longer(self) -> None:
         exc = Kp2pStreamOpenError(channel=1, stream_id=0, result=-40)
