@@ -27,6 +27,7 @@ class AddonLauncherOptionsTests(unittest.TestCase):
         options = addon_launcher.default_options()
 
         self.assertEqual(options["host"], "192.168.1.10")
+        self.assertFalse(options["transcode_h264"])
         self.assertEqual(options["cameras"][0], expected_first_camera)
         self.assertEqual(len(options["cameras"]), 8)
         self.assertTrue(all(camera["rtsp_port"] == 8554 for camera in options["cameras"]))
@@ -103,6 +104,16 @@ class AddonLauncherOptionsTests(unittest.TestCase):
         self.assertIn("--mediamtx-host", command)
         self.assertIn("127.0.0.1", command)
         self.assertEqual(command[command.index("--rtsp-port") + 1], "8554")
+        self.assertNotIn("--transcode-h264", command)
+
+    def test_build_bridge_command_enables_h264_transcoding(self) -> None:
+        options = addon_launcher.default_options()
+        options["transcode_h264"] = True
+        camera = addon_launcher.build_camera_configs(options)[0]
+
+        command = addon_launcher.build_bridge_command(options, camera)
+
+        self.assertIn("--transcode-h264", command)
 
     def test_build_shared_mediamtx_config_contains_all_paths(self) -> None:
         cameras = [

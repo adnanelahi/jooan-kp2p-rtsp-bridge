@@ -67,6 +67,7 @@ def default_options() -> dict:
         "password": "",
         "reconnect_delay": 3,
         "ffmpeg_loglevel": "warning",
+        "transcode_h264": False,
         "cameras": [
             {
                 "channel": channel,
@@ -216,6 +217,8 @@ def build_bridge_command(options: dict, camera: CameraConfig) -> list[str]:
         command.extend(["--uid", str(options.get("uid", ""))])
     else:
         command.extend(["--host", str(options.get("host", "192.168.1.10")), "--port", str(options.get("port", 10000))])
+    if _as_bool(options.get("transcode_h264", False)):
+        command.append("--transcode-h264")
     return command
 
 

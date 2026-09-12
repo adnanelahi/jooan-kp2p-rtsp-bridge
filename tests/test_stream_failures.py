@@ -119,6 +119,19 @@ class StreamFailureTests(unittest.TestCase):
         self.assertIn("-bsf:v", command)
         self.assertIn("setts=time_base=1/90000:pts=N/(15*TB_OUT):dts=N/(15*TB_OUT):duration=1/(15*TB_OUT)", command)
 
+    def test_ffmpeg_command_can_transcode_to_h264_with_short_gop(self) -> None:
+        args = build_parser().parse_args(
+            ["--password", "secret", "--channel", "0", "--transcode-h264"]
+        )
+
+        command = build_ffmpeg_command(args, "H265", 14)
+
+        self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+        self.assertEqual(command[command.index("-g") + 1], "14")
+        self.assertEqual(command[command.index("-keyint_min") + 1], "14")
+        self.assertIn("zerolatency", command)
+        self.assertNotIn("-bsf:v", command)
+
     def test_packet_timestamp_bsf_uses_default_fps_when_source_is_missing(self) -> None:
         self.assertEqual(
             build_packet_timestamp_bsf(0),

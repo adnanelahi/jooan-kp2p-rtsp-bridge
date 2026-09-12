@@ -25,6 +25,7 @@ This repository ships both a **Home Assistant add-on** and a **plain Docker cont
 - `reconnect_delay`: Delay before retrying if a bridge process fails.
 - `unavailable_stream_reconnect_delay`: Delay before retrying a channel that reports `result=-40` / unavailable.
 - `ffmpeg_loglevel`: FFmpeg log verbosity.
+- `transcode_h264`: Transcode the camera stream to H.264 with a one-second keyframe interval. Enable this for Home Assistant or browsers that time out or cannot decode the native H.265 stream. This uses additional CPU.
 - `cameras`: List of camera bridge definitions.
 
 ### Camera list

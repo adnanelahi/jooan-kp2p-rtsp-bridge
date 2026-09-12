@@ -196,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mediamtx-host", default="127.0.0.1", help="Host of the RTSP relay to publish to.")
     parser.add_argument("--shared-mediamtx", action="store_true", help="Publish to a shared mediamtx server instead of managing one locally.")
     parser.add_argument("--ffmpeg-loglevel", default="warning")
+    parser.add_argument(
+        "--transcode-h264",
+        action="store_true",
+        help="Transcode video to browser-compatible H.264 with a one-second keyframe interval.",
+    )
     parser.add_argument("--rtsp-listen-host", default="0.0.0.0", help="Host ffmpeg should bind the RTSP server to.")
     parser.add_argument("--rtsp-port", type=int, default=8554)
     parser.add_argument("--rtsp-path", default="cam3", help="RTSP path name, for example cam3.")
@@ -302,7 +307,7 @@ def build_ffmpeg_command(args: argparse.Namespace, codec: str, frame_fps: int) -
     # Push to the local mediamtx relay on loopback.  mediamtx then serves
     # RTSP pull connections to clients on the same port.
     push_url = f"rtsp://{args.mediamtx_host}:{args.rtsp_port}/{args.rtsp_path.lstrip('/')}"
-    return [
+    command = [
         args.ffmpeg_bin,
         "-hide_banner",
         "-loglevel",
@@ -322,16 +327,31 @@ def build_ffmpeg_command(args: argparse.Namespace, codec: str, frame_fps: int) -
         "-i",
         "pipe:0",
         "-an",
-        "-c:v",
-        "copy",
-        "-bsf:v",
-        build_packet_timestamp_bsf(frame_fps),
-        "-f",
-        "rtsp",
-        "-rtsp_transport",
-        "tcp",
-        push_url,
     ]
+    if args.transcode_h264:
+        keyframe_interval = max(1, round(input_fps))
+        command.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                str(keyframe_interval),
+                "-keyint_min",
+                str(keyframe_interval),
+                "-sc_threshold",
+                "0",
+            ]
+        )
+    else:
+        command.extend(["-c:v", "copy", "-bsf:v", build_packet_timestamp_bsf(frame_fps)])
+    command.extend(["-f", "rtsp", "-rtsp_transport", "tcp", push_url])
+    return command
 
 
 class FfmpegRtspPublisher:
